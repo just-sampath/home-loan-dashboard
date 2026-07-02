@@ -1,7 +1,8 @@
 import { Plus, Trash2 } from 'lucide-react';
+import { useState } from 'react';
 
 import { Card, StatCard } from '../components/Primitives';
-import type { LoanAnalysis, PartPayment } from '../features/loan/loanEngine';
+import type { LoanAnalysis, PartPayment, PartPaymentImpact } from '../features/loan/loanEngine';
 import { formatDuration, formatInrShort, formatMonthYear } from '../utils/format';
 
 type PartPaymentsPageProps = {
@@ -67,63 +68,15 @@ export function PartPaymentsPage({ analysis, partPayments, onChange }: PartPayme
                 </tr>
               </thead>
               <tbody>
-                {partPayments.map((payment, index) => {
-                  const impact = analysis.partPaymentImpacts[index];
-                  const interestSaved = impact?.interestSaved ?? 0;
-                  const roi = payment.amount > 0 ? (interestSaved / payment.amount) * 100 : 0;
-
-                  return (
-                    <tr key={`${payment.date}-${index}`}>
-                      <td>
-                        <input
-                          className="input min-w-40"
-                          type="date"
-                          value={payment.date}
-                          onChange={(event) =>
-                            updatePayment(
-                              partPayments,
-                              index,
-                              { date: event.target.value },
-                              onChange,
-                            )
-                          }
-                        />
-                      </td>
-                      <td className="numeric">
-                        <input
-                          className="input min-w-32 text-right"
-                          type="number"
-                          step="10000"
-                          value={payment.amount}
-                          onChange={(event) =>
-                            updatePayment(
-                              partPayments,
-                              index,
-                              { amount: Number(event.target.value) },
-                              onChange,
-                            )
-                          }
-                        />
-                      </td>
-                      <td className="numeric font-bold">{impact?.monthsSaved ?? 0}</td>
-                      <td className="numeric font-bold text-[var(--jade)]">
-                        {formatInrShort(interestSaved)}
-                      </td>
-                      <td className="numeric">
-                        <span className="chip chip-jade">{roi.toFixed(0)}%</span>
-                      </td>
-                      <td>
-                        <button
-                          className="icon-btn"
-                          onClick={() => removePayment(partPayments, index, onChange)}
-                          aria-label="Delete prepayment"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {partPayments.map((payment, index) => (
+                  <PartPaymentRow
+                    key={`${payment.date}-${index}`}
+                    impact={analysis.partPaymentImpacts[index]}
+                    payment={payment}
+                    onUpdate={(patch) => updatePayment(partPayments, index, patch, onChange)}
+                    onRemove={() => removePayment(partPayments, index, onChange)}
+                  />
+                ))}
               </tbody>
             </table>
           </div>
@@ -189,4 +142,106 @@ function removePayment(
 
 function sortPayments(partPayments: PartPayment[]): PartPayment[] {
   return [...partPayments].sort((left, right) => left.date.localeCompare(right.date));
+}
+
+type PartPaymentRowProps = {
+  payment: PartPayment;
+  impact: PartPaymentImpact | undefined;
+  onUpdate: (patch: Partial<PartPayment>) => void;
+  onRemove: () => void;
+};
+
+/**
+ * Renders a single editable prepayment row.
+ *
+ * Holds local drafts for the date and amount inputs so transient invalid values
+ * (an empty field, a zero, a partially typed date) never propagate to the loan
+ * engine. A value is only committed once it parses as a valid calendar date and a
+ * positive finite amount.
+ */
+function PartPaymentRow({ payment, impact, onUpdate, onRemove }: PartPaymentRowProps) {
+  const [dateDraft, setDateDraft] = useState(payment.date);
+  const [amountDraft, setAmountDraft] = useState(String(payment.amount));
+  const [trackedDate, setTrackedDate] = useState(payment.date);
+  const [trackedAmount, setTrackedAmount] = useState(payment.amount);
+
+  if (payment.date !== trackedDate) {
+    setTrackedDate(payment.date);
+    setDateDraft(payment.date);
+  }
+
+  if (payment.amount !== trackedAmount) {
+    setTrackedAmount(payment.amount);
+    setAmountDraft(String(payment.amount));
+  }
+
+  const interestSaved = impact?.interestSaved ?? 0;
+  const roi = payment.amount > 0 ? (interestSaved / payment.amount) * 100 : 0;
+
+  const handleDate = (raw: string): void => {
+    setDateDraft(raw);
+    if (isValidIsoDate(raw)) {
+      onUpdate({ date: raw });
+    }
+  };
+
+  const handleAmount = (raw: string): void => {
+    setAmountDraft(raw);
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      onUpdate({ amount: parsed });
+    }
+  };
+
+  return (
+    <tr>
+      <td>
+        <input
+          className="input min-w-40"
+          type="date"
+          value={dateDraft}
+          onChange={(event) => handleDate(event.target.value)}
+        />
+      </td>
+      <td className="numeric">
+        <input
+          className="input min-w-32 text-right"
+          type="number"
+          step="10000"
+          value={amountDraft}
+          onChange={(event) => handleAmount(event.target.value)}
+        />
+      </td>
+      <td className="numeric font-bold">{impact?.monthsSaved ?? 0}</td>
+      <td className="numeric font-bold text-[var(--jade)]">{formatInrShort(interestSaved)}</td>
+      <td className="numeric">
+        <span className="chip chip-jade">{roi.toFixed(0)}%</span>
+      </td>
+      <td>
+        <button
+          className="icon-btn"
+          onClick={onRemove}
+          aria-label="Delete prepayment"
+          type="button"
+        >
+          <Trash2 size={15} />
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+function isValidIsoDate(date: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+
+  if (match === null) {
+    return false;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+  return month >= 1 && month <= 12 && day >= 1 && day <= lastDay;
 }

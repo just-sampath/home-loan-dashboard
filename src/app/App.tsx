@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { loanConfig, today } from '../config/loan.config';
 import { buildLoanAnalysis } from '../features/loan/loanEngine';
 import type { LoanConfig, PartPayment, RateChange } from '../features/loan/loanEngine';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { DashboardPage } from '../pages/DashboardPage';
 import { PartPaymentsPage } from '../pages/PartPaymentsPage';
 import { RateChangesPage } from '../pages/RateChangesPage';
@@ -54,6 +55,12 @@ export function App() {
 
   const analysis = useMemo(() => buildLoanAnalysis(activeConfig, today), [activeConfig]);
 
+  const resetData = (): void => {
+    resetStoredData();
+    setPrefs(defaultPrefs);
+    setUserData(defaultUserData);
+  };
+
   useEffect(() => {
     document.documentElement.dataset.theme = prefs.theme;
     document.documentElement.dataset.palette = prefs.palette === 'default' ? '' : prefs.palette;
@@ -78,16 +85,14 @@ export function App() {
         ...data,
         scenarios: [...data.scenarios, createEmptyScenario(data.scenarios.length)],
       })),
-    resetData: () => {
-      resetStoredData();
-      setPrefs(defaultPrefs);
-      setUserData(defaultUserData);
-    },
+    resetData,
   });
 
   return (
     <AppLayout activePage={page} onNavigate={setPage}>
-      {pageElement}
+      <ErrorBoundary resetKeys={[page, userData]} onReset={resetData}>
+        {pageElement}
+      </ErrorBoundary>
     </AppLayout>
   );
 }
