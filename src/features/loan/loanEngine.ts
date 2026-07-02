@@ -13,6 +13,7 @@ export type LoanConfig = {
   originalRate: number;
   tenureMonths: number;
   startDate: string;
+  preEmiInterest?: number;
   rateChanges: RateChange[];
   partPayments: PartPayment[];
 };
@@ -21,12 +22,12 @@ export type ScheduleRow = {
   index: number;
   date: string;
   rate: number;
-  balanceBeforePrepayment: number;
   openingBalance: number;
-  prepayment: number;
   interest: number;
   principal: number;
   emi: number;
+  prepayment: number;
+  simpleInterest: number;
   closingBalance: number;
   rateChanged: boolean;
   newRate: number | null;
@@ -40,6 +41,8 @@ export type ScheduleSummary = {
   totalPrepayment: number;
   totalEmiPaid: number;
   totalOutflow: number;
+  totalSimpleInterest: number;
+  preEmiInterest: number;
   baseEmi: number;
   payoffDate: string;
 };
@@ -185,7 +188,7 @@ export function createSchedule(config: LoanConfig): LoanSchedule {
 
   return {
     rows,
-    summary: summarizeSchedule(rows, baseEmi),
+    summary: summarizeSchedule(rows, baseEmi, config.preEmiInterest ?? 0),
   };
 }
 
@@ -227,7 +230,7 @@ export function buildLoanAnalysis(config: LoanConfig, today: string): LoanAnalys
 function buildScheduleRows(
   config: LoanConfig,
   rateChanges: Map<number, NormalizedRateChange>,
-  prepaymentsByMonth: Map<number, number>,
+  prepaymentsByMonth: Map<number, PartPayment[]>,
   baseEmi: number,
 ): ScheduleRow[] {
   const rows: ScheduleRow[] = [];
@@ -243,8 +246,8 @@ function buildScheduleRows(
       balance,
       rate: currentRate,
       baseEmi,
-      prepayment: prepaymentsByMonth.get(index) ?? 0,
-      date: monthStartFromIndex(config.startDate, index),
+      prepayments: prepaymentsByMonth.get(index) ?? [],
+      date: emiDateFromIndex(config.startDate, index),
       rateChange,
     });
 
@@ -265,16 +268,22 @@ function createScheduleRow(input: {
   balance: number;
   rate: number;
   baseEmi: number;
-  prepayment: number;
+  prepayments: PartPayment[];
   rateChange: NormalizedRateChange | undefined;
 }): ScheduleRow {
-  const prepayment = Math.min(input.prepayment, input.balance);
-  const openingBalance = input.balance - prepayment;
+  const openingBalance = input.balance;
   const interest = openingBalance * (input.rate / 12 / 100);
   const maximumPayment = openingBalance + interest;
   const emi = Math.min(input.baseEmi, maximumPayment);
   const principal = Math.min(openingBalance, Math.max(0, emi - interest));
-  const closingBalance = Math.max(0, openingBalance - principal);
+  const balanceAfterEmi = Math.max(0, openingBalance - principal);
+  const totalPrepaymentAmount = input.prepayments.reduce((sum, payment) => sum + payment.amount, 0);
+  const prepayment = Math.min(totalPrepaymentAmount, balanceAfterEmi);
+  const simpleInterest = input.prepayments.reduce(
+    (sum, payment) => sum + computeSimpleInterest(payment, input.rate),
+    0,
+  );
+  const closingBalance = Math.max(0, balanceAfterEmi - prepayment);
 
   if (principal <= 0 && prepayment <= 0 && closingBalance > DEFAULT_EPSILON) {
     throw new Error('EMI is not high enough to cover monthly interest');
@@ -284,39 +293,68 @@ function createScheduleRow(input: {
     index: input.index,
     date: input.date,
     rate: input.rate,
-    balanceBeforePrepayment: input.balance,
     openingBalance,
-    prepayment,
     interest,
     principal,
     emi,
+    prepayment,
+    simpleInterest,
     closingBalance,
     rateChanged: input.rateChange !== undefined,
     newRate: input.rateChange?.rate ?? null,
   };
 }
 
-function summarizeSchedule(rows: ScheduleRow[], baseEmi: number): ScheduleSummary {
+/**
+ * Computes the simple interest HDFC charges on a mid-month prepayment: interest on
+ * the prepaid amount from the day after the EMI (day 2) to the day before the
+ * prepayment (day d-1), i.e. `max(0, day - 2)` days at the current annual rate.
+ */
+function computeSimpleInterest(prepayment: PartPayment, annualRate: number): number {
+  const { year, day } = parseIsoDate(prepayment.date);
+  const accrualDays = Math.max(0, day - 2);
+
+  if (accrualDays === 0) {
+    return 0;
+  }
+
+  const daysInYear = isLeapYear(year) ? 366 : 365;
+
+  return (prepayment.amount * (annualRate / 100) * accrualDays) / daysInYear;
+}
+
+function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+function summarizeSchedule(
+  rows: ScheduleRow[],
+  baseEmi: number,
+  preEmiInterest: number,
+): ScheduleSummary {
   const totals = rows.reduce(
     (sum, row) => ({
       interest: sum.interest + row.interest,
+      simpleInterest: sum.simpleInterest + row.simpleInterest,
       principal: sum.principal + row.principal,
       prepayment: sum.prepayment + row.prepayment,
       emi: sum.emi + row.emi,
     }),
-    { interest: 0, principal: 0, prepayment: 0, emi: 0 },
+    { interest: 0, simpleInterest: 0, principal: 0, prepayment: 0, emi: 0 },
   );
   const payoffDate = rows.at(-1)?.date ?? '';
   const totalPrincipal = totals.principal + totals.prepayment;
 
   return {
     totalMonths: rows.length,
-    totalInterest: totals.interest,
+    totalInterest: totals.interest + totals.simpleInterest + preEmiInterest,
     totalPrincipal,
     principalFromEmi: totals.principal,
     totalPrepayment: totals.prepayment,
     totalEmiPaid: totals.emi,
-    totalOutflow: totals.emi + totals.prepayment,
+    totalOutflow: totals.emi + totals.prepayment + totals.simpleInterest + preEmiInterest,
+    totalSimpleInterest: totals.simpleInterest,
+    preEmiInterest,
     baseEmi,
     payoffDate,
   };
@@ -406,12 +444,14 @@ function normalizeRateChanges(config: LoanConfig): Map<number, NormalizedRateCha
   return new Map(sortedChanges.map((event) => [event.effectiveMonth, event]));
 }
 
-function groupPartPayments(config: LoanConfig): Map<number, number> {
+function groupPartPayments(config: LoanConfig): Map<number, PartPayment[]> {
   return config.partPayments.reduce((groups, event) => {
     const effectiveMonth = getEffectiveMonthIndex(event.date, config.startDate, 'partPayment');
-    groups.set(effectiveMonth, (groups.get(effectiveMonth) ?? 0) + event.amount);
+    const list = groups.get(effectiveMonth) ?? [];
+    list.push(event);
+    groups.set(effectiveMonth, list);
     return groups;
-  }, new Map<number, number>());
+  }, new Map<number, PartPayment[]>());
 }
 
 function createYearlyAggregates(rows: ScheduleRow[]): YearlyAggregate[] {
@@ -420,7 +460,7 @@ function createYearlyAggregates(rows: ScheduleRow[]): YearlyAggregate[] {
     const aggregate = groups.get(year) ?? emptyYearlyAggregate(year);
 
     aggregate.principal += row.principal;
-    aggregate.interest += row.interest;
+    aggregate.interest += row.interest + row.simpleInterest;
     aggregate.prepayment += row.prepayment;
     aggregate.emi += row.emi;
     aggregate.count += 1;
@@ -454,7 +494,7 @@ function totalCompletedRows(rows: ScheduleRow[]): {
   return rows.reduce(
     (sum, row) => ({
       principal: sum.principal + row.principal + row.prepayment,
-      interest: sum.interest + row.interest,
+      interest: sum.interest + row.interest + row.simpleInterest,
       emi: sum.emi + row.emi,
       prepayment: sum.prepayment + row.prepayment,
     }),
@@ -468,13 +508,14 @@ function getCalendarMonthIndex(date: string, startDate: string): number {
   return (inputDate.year - start.year) * 12 + (inputDate.month - start.month) + 1;
 }
 
-function monthStartFromIndex(startDate: string, monthIndex: number): string {
+function emiDateFromIndex(startDate: string, monthIndex: number): string {
   const start = parseIsoDate(startDate);
   const zeroBasedMonth = start.month - 1 + (monthIndex - 1);
   const year = start.year + Math.floor(zeroBasedMonth / 12);
   const month = positiveModulo(zeroBasedMonth, 12) + 1;
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
 
-  return `${year}-${pad2(month)}-01`;
+  return `${year}-${pad2(month)}-${pad2(lastDay)}`;
 }
 
 function positiveModulo(value: number, divisor: number): number {
@@ -512,6 +553,9 @@ function validateLoanConfig(config: LoanConfig): void {
   validatePositiveNumber(config.principal, 'principal');
   validatePositiveInteger(config.tenureMonths, 'tenureMonths');
   validateNonNegativeNumber(config.originalRate, 'originalRate');
+  if (config.preEmiInterest !== undefined) {
+    validateNonNegativeNumber(config.preEmiInterest, 'preEmiInterest');
+  }
   parseIsoDate(config.startDate);
   config.rateChanges.forEach((event) => validateRateChange(event));
   config.partPayments.forEach((event) => validatePartPayment(event));

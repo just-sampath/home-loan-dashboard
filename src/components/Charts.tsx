@@ -124,8 +124,10 @@ export function BalanceChart({ analysis }: BalanceChartProps) {
           <ActiveBalanceOverlay readout={activeReadout} scale={chart.scale} />
           <PayoffCallouts
             actualIndex={analysis.actual.summary.totalMonths}
+            actualPayoff={analysis.actual.summary.payoffDate}
             duration={formatDuration(analysis.monthsSaved)}
             originalIndex={analysis.original.summary.totalMonths}
+            originalPayoff={analysis.original.summary.payoffDate}
             scale={chart.scale}
           />
           {chart.markers.map((marker) => (
@@ -572,13 +574,17 @@ function TodayMarker({ scale, todayIndex }: { scale: ChartScale; todayIndex: num
 
 function PayoffCallouts({
   actualIndex,
+  actualPayoff,
   duration,
   originalIndex,
+  originalPayoff,
   scale,
 }: {
   actualIndex: number;
+  actualPayoff: string;
   duration: string;
   originalIndex: number;
+  originalPayoff: string;
   scale: ChartScale;
 }) {
   const actualX = scale.x(actualIndex);
@@ -590,7 +596,7 @@ function PayoffCallouts({
     <g>
       <circle cx={originalX} cy={baselineY} fill="#949596" r="4" />
       <text className="svg-muted" textAnchor="middle" x={originalX} y={baselineY + 28}>
-        Aug 2039
+        {formatMonthYear(originalPayoff)}
       </text>
       <circle
         cx={actualX}
@@ -610,7 +616,7 @@ function PayoffCallouts({
         y={baselineY - 42}
       />
       <text className="svg-callout" textAnchor="middle" x={actualX} y={baselineY - 25}>
-        Sep 2033
+        {formatMonthYear(actualPayoff)}
       </text>
       <line
         stroke="var(--jade)"
@@ -760,7 +766,7 @@ function buildBalancePoints(rows: ScheduleRow[]): ChartPoint[] {
   }
 
   return [
-    { index: 0, balance: first.balanceBeforePrepayment },
+    { index: 0, balance: first.openingBalance },
     ...rows.map((row) => ({ index: row.index, balance: row.closingBalance })),
   ];
 }

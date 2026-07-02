@@ -26,7 +26,7 @@ export function DashboardPage({ analysis }: DashboardPageProps) {
   const progress = (analysis.paidPrincipal / analysis.actual.summary.totalPrincipal) * 100;
   const currentRate = analysis.nextRow?.rate ?? analysis.actual.rows.at(-1)?.rate ?? 0;
   const nextEmi = analysis.nextRow?.emi ?? analysis.actual.summary.baseEmi;
-  const remainingEmis = Math.max(0, analysis.actual.summary.totalMonths - analysis.todayIndex + 1);
+  const remainingEmis = Math.max(0, analysis.actual.summary.totalMonths - analysis.todayIndex);
   const impactEvents = [...analysis.rateImpacts, ...analysis.partPaymentImpacts].sort((a, b) =>
     a.date.localeCompare(b.date),
   );

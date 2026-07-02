@@ -17,8 +17,8 @@ describe('dashboard chart details', () => {
     expect(markup).toContain('Savings');
     expect(markup).toContain('Rate drop');
     expect(markup).toContain('Prepayment');
-    expect(markup).toContain('5 yr 11 mo earlier');
-    expect(markup).toContain('Sep 2033');
+    expect(markup).toContain('7 yr 6 mo earlier');
+    expect(markup).toContain('Feb 2032');
     expect(markup).toContain('Aug 2039');
     expect(markup).toContain('Actual balance');
     expect(markup).toContain('If nothing changed');
@@ -26,7 +26,7 @@ describe('dashboard chart details', () => {
     expect(markup).toContain('role="button"');
     expect(markup).toContain('tabindex="0"');
     expect(markup.match(/data-event-kind="rate"/g)).toHaveLength(4);
-    expect(markup.match(/data-event-kind="prepayment"/g)).toHaveLength(4);
+    expect(markup.match(/data-event-kind="prepayment"/g)).toHaveLength(6);
   });
 
   test('renders impact bars with rate and prepayment labels', () => {
